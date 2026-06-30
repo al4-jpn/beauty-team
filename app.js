@@ -6,7 +6,7 @@ const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
 
 let tokenClient;
 let accessToken = null;
-let images = []; // { id, name, url (Blob URL), driveUrl }
+let images = []; // { id, name, url(blob URL), driveUrl }
 let currentPreviewIndex = 0;
 
 // ===== 初期化 =====
@@ -77,18 +77,20 @@ function updateUIAfterLogin() {
 // ===== Google Drive API =====
 
 /**
- * これまでに作成した Blob URL をすべて解放する（メモリリーク防止）
+ * 既存のBlob URLをすべて解放する（メモリリーク防止）
  */
 function revokeAllImageUrls() {
     images.forEach(img => {
-        if (img.url) URL.revokeObjectURL(img.url);
+        if (img.url && img.url.startsWith('blob:')) {
+            URL.revokeObjectURL(img.url);
+        }
     });
 }
 
 /**
- * 指定したファイル ID の画像本体を取得し、Blob URL を返す
- * （webViewLink や uc?export=download は <img> から直接読み込めないため、
- *   Authorization ヘッダー付きで alt=media エンドポイントから取得する）
+ * Drive上の画像本体を取得し、Blob URLを返す
+ * （drive.google.com/uc?... は認証付きimgタグからは読み込めないため、
+ *   APIのalt=mediaエンドポイントからAuthorizationヘッダー付きで取得する）
  */
 async function fetchImageAsBlobUrl(fileId) {
     const response = await fetch(
@@ -106,34 +108,6 @@ async function fetchImageAsBlobUrl(fileId) {
 
     const blob = await response.blob();
     return URL.createObjectURL(blob);
-}
-
-/**
- * 指定したファイル ID の画像本体を取得し、Base64 の Data URI を返す
- * （生成した HTML を単体のファイルとして配布・保存できるようにするため）
- */
-async function fetchImageAsDataUri(fileId) {
-    const response = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-        {
-            headers: {
-                'Authorization': `Bearer ${accessToken}`,
-            }
-        }
-    );
-
-    if (!response.ok) {
-        throw new Error(`画像取得エラー (${fileId}): ${response.status}`);
-    }
-
-    const blob = await response.blob();
-
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => reject(new Error('画像の読み込みに失敗しました'));
-        reader.readAsDataURL(blob);
-    });
 }
 
 /**
@@ -175,38 +149,39 @@ async function loadImagesFromFolder() {
 
         const data = await response.json();
 
+        // 既存のBlob URLを解放してから上書きする
+        revokeAllImageUrls();
+
         if (!data.files || data.files.length === 0) {
             showStatus('error', 'フォルダに画像が見つかりません');
-            revokeAllImageUrls();
             images = [];
             renderImageGrid();
             return;
         }
 
-        // 既存の Blob URL を解放してから新しく取得する
-        revokeAllImageUrls();
+        showStatus('loading', `画像データを取得中... (0 / ${data.files.length})`);
 
-        showStatus('loading', `画像データを取得中... (0/${data.files.length})`);
+        // 各画像の本体をAPI経由で取得し、Blob URL化する
+        const loaded = [];
+        let doneCount = 0;
 
-        let loadedCount = 0;
-        images = [];
-
-        // 1枚ずつ取得（同時並行だとレート制限に当たりやすいため順番に処理）
         for (const file of data.files) {
             try {
                 const blobUrl = await fetchImageAsBlobUrl(file.id);
-                images.push({
+                loaded.push({
                     id: file.id,
                     name: file.name,
                     url: blobUrl,
                     driveUrl: file.webViewLink
                 });
             } catch (err) {
-                console.error(`画像の取得に失敗しました: ${file.name}`, err);
+                console.error('画像取得失敗:', file.name, err);
             }
-            loadedCount++;
-            showStatus('loading', `画像データを取得中... (${loadedCount}/${data.files.length})`);
+            doneCount++;
+            showStatus('loading', `画像データを取得中... (${doneCount} / ${data.files.length})`);
         }
+
+        images = loaded;
 
         if (images.length === 0) {
             showStatus('error', '画像の取得に失敗しました');
@@ -257,7 +232,7 @@ function renderImageGrid() {
 
 let draggedElement = null;
 
-function handleDragStart() {
+function handleDragStart(e) {
     draggedElement = this;
     this.classList.add('dragging');
 }
@@ -283,7 +258,7 @@ function handleDrop(e) {
     renderImageGrid();
 }
 
-function handleDragEnd() {
+function handleDragEnd(e) {
     this.classList.remove('dragging');
     draggedElement = null;
 }
@@ -316,9 +291,35 @@ function startPreview() {
 // ===== HTML 生成 =====
 
 /**
+ * Drive上の画像本体を取得し、Base64のData URIとして返す
+ * （生成したHTMLファイルは単独で配布・再生されるため、
+ *   セッション依存のBlob URLではなくData URIに埋め込む必要がある）
+ */
+async function fetchImageAsDataUri(fileId) {
+    const response = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+        {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+            }
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error(`画像取得エラー (${fileId}): ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+}
+
+/**
  * スライドショー HTML を生成
- * 配布・保存できる単体ファイルにするため、画像は Base64 の Data URI として埋め込む
- * （Blob URL はタブを閉じると無効になるため使用できない）
  */
 async function generateHTML() {
     if (images.length === 0) {
@@ -326,20 +327,22 @@ async function generateHTML() {
         return;
     }
 
-    const duration = document.getElementById('slideDuration').value;
-    const transitionType = document.getElementById('transitionType').value;
-    const autoPlay = document.getElementById('autoPlayCheckbox').checked;
-
     const generateBtn = document.getElementById('generateBtn');
     generateBtn.disabled = true;
-    showStatus('loading', 'HTML 生成用に画像を変換中... (0/' + images.length + ')');
 
     try {
+        const duration = document.getElementById('slideDuration').value;
+        const transitionType = document.getElementById('transitionType').value;
+        const autoPlay = document.getElementById('autoPlayCheckbox').checked;
+
+        showStatus('loading', `HTML生成用に画像を埋め込み中... (0 / ${images.length})`);
+
+        // 配布用HTMLには、画像をBase64のData URIとして埋め込む
         const imageDataUris = [];
         for (let i = 0; i < images.length; i++) {
             const dataUri = await fetchImageAsDataUri(images[i].id);
             imageDataUris.push(dataUri);
-            showStatus('loading', `HTML 生成用に画像を変換中... (${i + 1}/${images.length})`);
+            showStatus('loading', `HTML生成用に画像を埋め込み中... (${i + 1} / ${images.length})`);
         }
 
         const html = generateSlideshowHTML(imageDataUris, {
@@ -366,7 +369,7 @@ async function generateHTML() {
         showStatus('success', 'HTML を生成しました！');
     } catch (error) {
         console.error('Error:', error);
-        showStatus('error', `HTML 生成中にエラーが発生しました: ${error.message}`);
+        showStatus('error', `HTML生成中にエラーが発生しました: ${error.message}`);
     } finally {
         generateBtn.disabled = false;
     }
@@ -717,6 +720,7 @@ function showStatus(type, message) {
     const statusEl = document.getElementById('loadStatus');
     statusEl.className = `status ${type}`;
     statusEl.textContent = message;
+    statusEl.style.display = 'block';
 
     if (type === 'success' || type === 'error') {
         setTimeout(() => {
