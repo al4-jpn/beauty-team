@@ -1,4 +1,3 @@
-
 // ===== Google OAuth 2.0 設定 =====
 // https://console.cloud.google.com でプロジェクトを作成し、
 // OAuth 2.0 クライアント ID を取得してください
@@ -289,97 +288,68 @@ function startPreview() {
     previewInterval = setInterval(updatePreview, duration);
 }
 
-// ===== HTML 生成 =====
+// ===== 埋め込みリンク生成 =====
 
 /**
- * Drive上の画像本体を取得し、Base64のData URIとして返す
- * （生成したHTMLファイルは単独で配布・再生されるため、
- *   セッション依存のBlob URLではなくData URIに埋め込む必要がある）
+ * fileIdから「リンクを知っている全員が表示可能」な直接表示用URLを作る
+ * （このURLは認証トークンなしで画像として開けるため、
+ *   コピペしてAIへの指示や他のHTML/Markdownに直接貼り付けられる）
  */
-async function fetchImageAsDataUri(fileId) {
-    const response = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-        {
-            headers: {
-                'Authorization': `Bearer ${accessToken}`,
-            }
-        }
-    );
-
-    if (!response.ok) {
-        throw new Error(`画像取得エラー (${fileId}): ${response.status}`);
-    }
-
-    const blob = await response.blob();
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-    });
+function buildPublicImageUrl(fileId) {
+    return `https://drive.google.com/thumbnail?id=${fileId}&sz=w2000`;
 }
 
 /**
- * スライドショー HTML を生成
+ * 現在の並び順のまま、画像の埋め込みリンク一覧をテキストで生成する
  */
-async function generateHTML() {
+function generateEmbedLinks() {
     if (images.length === 0) {
         showStatus('error', '画像を読み込んでください');
         return;
     }
 
-    const generateBtn = document.getElementById('generateBtn');
-    generateBtn.disabled = true;
+    // 並び替え後の順番のまま、1行1リンクのテキストを作る
+    const linksText = images
+        .map((img, idx) => `${idx + 1}. ${buildPublicImageUrl(img.id)}`)
+        .join('\n');
+
+    const downloadSection = document.getElementById('downloadSection');
+    downloadSection.innerHTML = `
+        <p style="margin-bottom:8px; font-size:13px; color:#666;">
+            ※ 各ファイルをGoogle Driveで「リンクを知っている全員が表示可能」に共有設定してください。
+            未設定の場合、リンクが開けないことがあります。
+        </p>
+        <textarea id="embedLinksTextarea" readonly style="width:100%; min-height:160px; font-family:monospace; font-size:13px; padding:8px;">${linksText}</textarea>
+        <div class="download-link" onclick="copyEmbedLinks()" style="margin-top:10px;">
+            📋 リンクをコピー
+        </div>
+    `;
+
+    showStatus('success', `${images.length} 件の埋め込みリンクを生成しました`);
+}
+
+/**
+ * テキストエリアの内容をクリップボードにコピーする
+ */
+async function copyEmbedLinks() {
+    const textarea = document.getElementById('embedLinksTextarea');
+    if (!textarea) return;
 
     try {
-        const duration = document.getElementById('slideDuration').value;
-        const transitionType = document.getElementById('transitionType').value;
-        const autoPlay = document.getElementById('autoPlayCheckbox').checked;
-
-        showStatus('loading', `HTML生成用に画像を埋め込み中... (0 / ${images.length})`);
-
-        // 配布用HTMLには、画像をBase64のData URIとして埋め込む
-        const imageDataUris = [];
-        for (let i = 0; i < images.length; i++) {
-            const dataUri = await fetchImageAsDataUri(images[i].id);
-            imageDataUris.push(dataUri);
-            showStatus('loading', `HTML生成用に画像を埋め込み中... (${i + 1} / ${images.length})`);
-        }
-
-        const html = generateSlideshowHTML(imageDataUris, {
-            duration: parseInt(duration),
-            transition: transitionType,
-            autoPlay: autoPlay
-        });
-
-        // Blob から URL を作成
-        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-
-        // ダウンロードセクションに表示
-        const downloadSection = document.getElementById('downloadSection');
-        downloadSection.innerHTML = `
-            <div class="download-link" onclick="downloadHTML('${url}')">
-                📥 slideshow.html をダウンロード
-            </div>
-            <div class="download-link" onclick="previewHTML('${url}')" style="margin-top:10px;">
-                👁️ プレビューで開く
-            </div>
-        `;
-
-        showStatus('success', 'HTML を生成しました！');
-    } catch (error) {
-        console.error('Error:', error);
-        showStatus('error', `HTML生成中にエラーが発生しました: ${error.message}`);
-    } finally {
-        generateBtn.disabled = false;
+        await navigator.clipboard.writeText(textarea.value);
+        showStatus('success', 'クリップボードにコピーしました');
+    } catch (err) {
+        // クリップボードAPIが使えない場合は選択状態にしてフォールバック
+        textarea.select();
+        showStatus('error', 'コピーに失敗しました。選択した状態のテキストを手動でコピーしてください');
     }
 }
 
 /**
- * スライドショー HTML を生成（コア関数）
+ * （未使用・参考用）スライドショー HTML を生成するコア関数
+ * 必要になった場合のために残していますが、現在は呼び出されていません
  */
-function generateSlideshowHTML(imageUrls, options = {}) {
+function generateSlideshowHTML_UNUSED(imageUrls, options = {}) {
     const {
         duration = 3,
         transition = 'fade',
