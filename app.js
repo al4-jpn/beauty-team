@@ -1,7 +1,7 @@
 // ===== Google OAuth 2.0 設定 =====
 // https://console.cloud.google.com でプロジェクトを作成し、
 // OAuth 2.0 クライアント ID を取得してください
-const CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com';
+const CLIENT_ID = '891563721553-i4cnihl7829u6bucsb7c14j71cvq57t8.apps.googleusercontent.com';
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
 
 let tokenClient;
