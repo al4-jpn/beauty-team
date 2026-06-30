@@ -6,7 +6,7 @@ const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
 
 let tokenClient;
 let accessToken = null;
-let images = [];
+let images = []; // { id, name, url (Blob URL), driveUrl }
 let currentPreviewIndex = 0;
 
 // ===== 初期化 =====
@@ -42,6 +42,7 @@ function loginWithGoogle() {
 // ログアウト
 function logout() {
     accessToken = null;
+    revokeAllImageUrls();
     images = [];
     document.getElementById('mainContent').style.display = 'none';
     document.getElementById('notLoggedIn').style.display = 'block';
@@ -68,18 +69,79 @@ function updateUIAfterLogin() {
     document.getElementById('loginBtn').style.display = 'none';
     document.getElementById('logoutBtn').style.display = 'block';
     document.getElementById('userInfo').style.display = 'block';
-    
+
+    // ユーザー情報を取得（簡略化）
     document.getElementById('userName').textContent = 'ログイン中';
 }
 
 // ===== Google Drive API =====
 
 /**
- * フォルダから画像を読み込む（Base64形式に変換して取得）
+ * これまでに作成した Blob URL をすべて解放する（メモリリーク防止）
+ */
+function revokeAllImageUrls() {
+    images.forEach(img => {
+        if (img.url) URL.revokeObjectURL(img.url);
+    });
+}
+
+/**
+ * 指定したファイル ID の画像本体を取得し、Blob URL を返す
+ * （webViewLink や uc?export=download は <img> から直接読み込めないため、
+ *   Authorization ヘッダー付きで alt=media エンドポイントから取得する）
+ */
+async function fetchImageAsBlobUrl(fileId) {
+    const response = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+        {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+            }
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error(`画像取得エラー (${fileId}): ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+}
+
+/**
+ * 指定したファイル ID の画像本体を取得し、Base64 の Data URI を返す
+ * （生成した HTML を単体のファイルとして配布・保存できるようにするため）
+ */
+async function fetchImageAsDataUri(fileId) {
+    const response = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+        {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+            }
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error(`画像取得エラー (${fileId}): ${response.status}`);
+    }
+
+    const blob = await response.blob();
+
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('画像の読み込みに失敗しました'));
+        reader.readAsDataURL(blob);
+    });
+}
+
+/**
+ * フォルダから画像を読み込む
  */
 async function loadImagesFromFolder() {
     const folderId = document.getElementById('folderIdInput').value.trim();
-    
+
     if (!folderId) {
         showStatus('error', 'フォルダ ID を入力してください');
         return;
@@ -90,10 +152,9 @@ async function loadImagesFromFolder() {
         return;
     }
 
-    showStatus('loading', 'Google Driveの情報を取得中...');
-    
+    showStatus('loading', '画像一覧を取得中...');
+
     try {
-        // 1. ファイル一覧を取得
         const response = await fetch(
             `https://www.googleapis.com/drive/v3/files?q=trashed=false and '${folderId}' in parents and mimeType contains 'image/'&fields=files(id,name,mimeType,webViewLink)&pageSize=100`,
             {
@@ -116,57 +177,40 @@ async function loadImagesFromFolder() {
 
         if (!data.files || data.files.length === 0) {
             showStatus('error', 'フォルダに画像が見つかりません');
+            revokeAllImageUrls();
             images = [];
             renderImageGrid();
             return;
         }
 
-        showStatus('loading', `画像データをダウンロード中 (0/${data.files.length})...`);
-        
-        // 2. 各画像をバイナリデータとして取得し、Base64（データURL）に変換
+        // 既存の Blob URL を解放してから新しく取得する
+        revokeAllImageUrls();
+
+        showStatus('loading', `画像データを取得中... (0/${data.files.length})`);
+
         let loadedCount = 0;
-        const imagePromises = data.files.map(async (file) => {
+        images = [];
+
+        // 1枚ずつ取得（同時並行だとレート制限に当たりやすいため順番に処理）
+        for (const file of data.files) {
             try {
-                const imgResponse = await fetch(
-                    `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
-                    {
-                        headers: {
-                            'Authorization': `Bearer ${accessToken}`,
-                        }
-                    }
-                );
-                if (!imgResponse.ok) throw new Error('画像のダウンロードに失敗');
-                
-                const blob = await imgResponse.blob();
-                
-                // Blob を Base64データURLに変換
-                const base64Url = await new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => resolve(reader.result);
-                    reader.onerror = reject;
-                    reader.readAsDataURL(blob);
-                });
-
-                loadedCount++;
-                showStatus('loading', `画像データをダウンロード中 (${loadedCount}/${data.files.length})...`);
-
-                return {
+                const blobUrl = await fetchImageAsBlobUrl(file.id);
+                images.push({
                     id: file.id,
                     name: file.name,
-                    url: base64Url, // 直リンクではなくBase64文字列が入る
+                    url: blobUrl,
                     driveUrl: file.webViewLink
-                };
+                });
             } catch (err) {
-                console.error(`ファイル名: ${file.name} の読み込み失敗`, err);
-                return null;
+                console.error(`画像の取得に失敗しました: ${file.name}`, err);
             }
-        });
-
-        const resolvedImages = await Promise.all(imagePromises);
-        images = resolvedImages.filter(img => img !== null);
+            loadedCount++;
+            showStatus('loading', `画像データを取得中... (${loadedCount}/${data.files.length})`);
+        }
 
         if (images.length === 0) {
-            showStatus('error', '画像の読み込みに失敗しました');
+            showStatus('error', '画像の取得に失敗しました');
+            renderImageGrid();
             return;
         }
 
@@ -201,6 +245,7 @@ function renderImageGrid() {
             <div class="index">${index + 1}</div>
         `;
 
+        // ドラッグ&ドロップ
         item.addEventListener('dragstart', handleDragStart);
         item.addEventListener('dragover', handleDragOver);
         item.addEventListener('drop', handleDrop);
@@ -212,7 +257,7 @@ function renderImageGrid() {
 
 let draggedElement = null;
 
-function handleDragStart(e) {
+function handleDragStart() {
     draggedElement = this;
     this.classList.add('dragging');
 }
@@ -224,20 +269,21 @@ function handleDragOver(e) {
 
 function handleDrop(e) {
     e.preventDefault();
-    
+
     if (draggedElement === this) return;
 
     const allItems = document.querySelectorAll('.image-item');
     const draggedIndex = Array.from(allItems).indexOf(draggedElement);
     const targetIndex = Array.from(allItems).indexOf(this);
 
+    // 配列を並び替え
     const [movedImage] = images.splice(draggedIndex, 1);
     images.splice(targetIndex, 0, movedImage);
 
     renderImageGrid();
 }
 
-function handleDragEnd(e) {
+function handleDragEnd() {
     this.classList.remove('dragging');
     draggedElement = null;
 }
@@ -250,35 +296,20 @@ function startPreview() {
     if (images.length === 0) return;
 
     const preview = document.getElementById('preview');
-    currentPreviewIndex = 0; // 最初の画像からスタート
+    currentPreviewIndex = 0;
 
     const updatePreview = () => {
-        // 安全対策: もし画像データが正常に取得できていない場合は処理を抜ける
-        if (!images[currentPreviewIndex] || !images[currentPreviewIndex].url) {
-            // インデックスが範囲外になったら0に戻す
-            currentPreviewIndex = 0;
-            if (!images[currentPreviewIndex]) return;
-        }
-
-        // 画面の書き換え
         preview.innerHTML = `
             <img src="${images[currentPreviewIndex].url}" alt="slide">
             <div class="slide-counter">${currentPreviewIndex + 1} / ${images.length}</div>
         `;
-
-        // 次に表示する画像のインデックスを計算（ここで安全にループさせる）
         currentPreviewIndex = (currentPreviewIndex + 1) % images.length;
     };
 
-    // 最初の一枚目を即座に表示
     updatePreview();
-    
-    // 既存のタイマーをクリアして再セット
     clearInterval(previewInterval);
 
-    const durationInput = document.getElementById('slideDuration');
-    const duration = durationInput ? parseInt(durationInput.value) * 1000 : 3000;
-    
+    const duration = parseInt(document.getElementById('slideDuration').value) * 1000;
     previewInterval = setInterval(updatePreview, duration);
 }
 
@@ -286,8 +317,10 @@ function startPreview() {
 
 /**
  * スライドショー HTML を生成
+ * 配布・保存できる単体ファイルにするため、画像は Base64 の Data URI として埋め込む
+ * （Blob URL はタブを閉じると無効になるため使用できない）
  */
-function generateHTML() {
+async function generateHTML() {
     if (images.length === 0) {
         showStatus('error', '画像を読み込んでください');
         return;
@@ -297,28 +330,46 @@ function generateHTML() {
     const transitionType = document.getElementById('transitionType').value;
     const autoPlay = document.getElementById('autoPlayCheckbox').checked;
 
-    const imageDataUris = images.map(img => img.url);
+    const generateBtn = document.getElementById('generateBtn');
+    generateBtn.disabled = true;
+    showStatus('loading', 'HTML 生成用に画像を変換中... (0/' + images.length + ')');
 
-    const html = generateSlideshowHTML(imageDataUris, {
-        duration: parseInt(duration),
-        transition: transitionType,
-        autoPlay: autoPlay
-    });
+    try {
+        const imageDataUris = [];
+        for (let i = 0; i < images.length; i++) {
+            const dataUri = await fetchImageAsDataUri(images[i].id);
+            imageDataUris.push(dataUri);
+            showStatus('loading', `HTML 生成用に画像を変換中... (${i + 1}/${images.length})`);
+        }
 
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
+        const html = generateSlideshowHTML(imageDataUris, {
+            duration: parseInt(duration),
+            transition: transitionType,
+            autoPlay: autoPlay
+        });
 
-    const downloadSection = document.getElementById('downloadSection');
-    downloadSection.innerHTML = `
-        <div class="download-link" onclick="downloadHTML('${url}')">
-            📥 slideshow.html をダウンロード
-        </div>
-        <div class="download-link" onclick="previewHTML('${url}')" style="margin-top:10px;">
-            👁️ プレビューで開く
-        </div>
-    `;
+        // Blob から URL を作成
+        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
 
-    showStatus('success', 'HTML を生成しました！');
+        // ダウンロードセクションに表示
+        const downloadSection = document.getElementById('downloadSection');
+        downloadSection.innerHTML = `
+            <div class="download-link" onclick="downloadHTML('${url}')">
+                📥 slideshow.html をダウンロード
+            </div>
+            <div class="download-link" onclick="previewHTML('${url}')" style="margin-top:10px;">
+                👁️ プレビューで開く
+            </div>
+        `;
+
+        showStatus('success', 'HTML を生成しました！');
+    } catch (error) {
+        console.error('Error:', error);
+        showStatus('error', `HTML 生成中にエラーが発生しました: ${error.message}`);
+    } finally {
+        generateBtn.disabled = false;
+    }
 }
 
 /**
@@ -486,11 +537,11 @@ function generateSlideshowHTML(imageUrls, options = {}) {
         };
 
         const showSlide = (n) => {
-            if(slides.length === 0) return;
             slides.forEach(slide => slide.classList.remove('active'));
             slides[n].classList.add('active');
             document.getElementById('current').textContent = n + 1;
-            
+
+            // プログレスバーをリセット
             const progressBar = document.getElementById('progressBar');
             progressBar.style.animation = 'none';
             setTimeout(() => {
@@ -532,15 +583,14 @@ function generateSlideshowHTML(imageUrls, options = {}) {
         };
 
         const init = () => {
-            if(totalSlides > 0) {
-                showSlide(0);
-                updatePlayPauseButton();
-                if (isPlaying) {
-                    startAutoPlay();
-                }
+            showSlide(0);
+            updatePlayPauseButton();
+            if (isPlaying) {
+                startAutoPlay();
             }
         };
 
+        // キーボード操作
         document.addEventListener('keydown', (e) => {
             if (e.key === 'ArrowRight') nextSlide();
             if (e.key === 'ArrowLeft') prevSlide();
@@ -556,48 +606,90 @@ function generateSlideshowHTML(imageUrls, options = {}) {
 </html>`;
 }
 
+/**
+ * トランジション CSS を取得
+ */
 function getTransitionCSS(type, duration) {
     switch (type) {
         case 'slide':
-            return `animation: slideOut ${duration}s ease-in-out forwards;`;
+            return `
+                animation: slideOut ${duration}s ease-in-out forwards;
+            `;
         case 'zoom':
-            return `animation: zoomOut ${duration}s ease-in-out forwards;`;
+            return `
+                animation: zoomOut ${duration}s ease-in-out forwards;
+            `;
         case 'fade':
         default:
-            return `opacity: 0;`;
+            return `
+                opacity: 0;
+            `;
     }
 }
 
+/**
+ * キーフレーム CSS を取得
+ */
 function getKeyframesCSS(type) {
     switch (type) {
         case 'slide':
             return `
                 @keyframes slideIn {
-                    from { transform: translateX(100%); opacity: 0; }
-                    to { transform: translateX(0); opacity: 1; }
+                    from {
+                        transform: translateX(100%);
+                        opacity: 0;
+                    }
+                    to {
+                        transform: translateX(0);
+                        opacity: 1;
+                    }
                 }
+
                 @keyframes slideOut {
-                    from { transform: translateX(0); opacity: 1; }
-                    to { transform: translateX(-100%); opacity: 0; }
+                    from {
+                        transform: translateX(0);
+                        opacity: 1;
+                    }
+                    to {
+                        transform: translateX(-100%);
+                        opacity: 0;
+                    }
                 }
             `;
         case 'zoom':
             return `
                 @keyframes slideIn {
-                    from { transform: scale(0.8); opacity: 0; }
-                    to { transform: scale(1); opacity: 1; }
+                    from {
+                        transform: scale(0.8);
+                        opacity: 0;
+                    }
+                    to {
+                        transform: scale(1);
+                        opacity: 1;
+                    }
                 }
+
                 @keyframes zoomOut {
-                    from { transform: scale(1); opacity: 1; }
-                    to { transform: scale(0.8); opacity: 0; }
+                    from {
+                        transform: scale(1);
+                        opacity: 1;
+                    }
+                    to {
+                        transform: scale(0.8);
+                        opacity: 0;
+                    }
                 }
             `;
         case 'fade':
         default:
             return `
                 @keyframes slideIn {
-                    from { opacity: 0; }
-                    to { opacity: 1; }
+                    from {
+                        opacity: 0;
+                    }
+                    to {
+                        opacity: 1;
+                    }
                 }
             `;
     }
@@ -625,8 +717,7 @@ function showStatus(type, message) {
     const statusEl = document.getElementById('loadStatus');
     statusEl.className = `status ${type}`;
     statusEl.textContent = message;
-    statusEl.style.display = 'block'; // 表示を確実にする
-    
+
     if (type === 'success' || type === 'error') {
         setTimeout(() => {
             statusEl.style.display = 'none';
