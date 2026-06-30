@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>スライドショー管理画面</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        h1 {
+            font-size: 28px;
+            color: #333;
+        }
+
+        .auth-section {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        #loginBtn {
+            background: #667eea;
+            color: white;
+        }
+
+        #loginBtn:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        #logoutBtn {
+            background: #ef4444;
+            color: white;
+        }
+
+        #logoutBtn:hover {
+            background: #dc2626;
+        }
+
+        .user-info {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .panel {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+        }
+
+        .panel h2 {
+            font-size: 20px;
+            color: #333;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 15px;
+        }
+
+        .folder-selector {
+            margin-bottom: 20px;
+        }
+
+        .folder-selector label {
+            display: block;
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .folder-selector input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .folder-selector input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .load-btn {
+            width: 100%;
+            background: #667eea;
+            color: white;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .load-btn:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .load-btn:disabled {
+            background: #cbd5e0;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            margin-top: 15px;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            display: none;
+        }
+
+        .status.success {
+            background: #dcfce7;
+            color: #166534;
+            border: 1px solid #86efac;
+            display: block;
+        }
+
+        .status.error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fca5a5;
+            display: block;
+        }
+
+        .status.loading {
+            background: #dbeafe;
+            color: #1e40af;
+            border: 1px solid #93c5fd;
+            display: block;
+        }
+
+        /* 画像リスト */
+        .image-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+            max-height: 500px;
+            overflow-y: auto;
+            padding: 10px;
+            background: #f9fafb;
+            border-radius: 8px;
+            border: 2px dashed #e5e7eb;
+        }
+
+        .image-item {
+            position: relative;
+            aspect-ratio: 1;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: move;
+            border: 2px solid #e5e7eb;
+            transition: all 0.2s;
+        }
+
+        .image-item:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            border-color: #667eea;
+        }
+
+        .image-item.dragging {
+            opacity: 0.5;
+        }
+
+        .image-item img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .image-item .index {
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+
+        /* プレビュー */
+        .preview-section {
+            margin-top: 30px;
+            padding-top: 30px;
+            border-top: 2px solid #e5e7eb;
+        }
+
+        .preview-section h3 {
+            font-size: 16px;
+            color: #333;
+            margin-bottom: 15px;
+        }
+
+        .slideshow-preview {
+            aspect-ratio: 16 / 9;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .slideshow-preview img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            animation: fadeInOut 3s infinite;
+        }
+
+        @keyframes fadeInOut {
+            0%, 10% { opacity: 1; }
+            45%, 55% { opacity: 1; }
+            90%, 100% { opacity: 0; }
+        }
+
+        .slide-counter {
+            position: absolute;
+            bottom: 15px;
+            right: 15px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* 設定パネル */
+        .settings-group {
+            margin-bottom: 20px;
+        }
+
+        .settings-group label {
+            display: block;
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .settings-group input,
+        .settings-group select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .settings-group input:focus,
+        .settings-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        /* 生成ボタン */
+        .generate-section {
+            margin-top: 30px;
+            padding-top: 30px;
+            border-top: 2px solid #e5e7eb;
+        }
+
+        .generate-btn {
+            width: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 16px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .generate-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .generate-btn:disabled {
+            background: #cbd5e0;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .download-link {
+            margin-top: 15px;
+            padding: 12px;
+            background: #dcfce7;
+            color: #166534;
+            border: 1px solid #86efac;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .download-link:hover {
+            background: #bbf7d0;
+        }
+
+        @media (max-width: 1024px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎬 スライドショー管理画面</h1>
+            <div class="auth-section">
+                <div class="user-info" id="userInfo" style="display:none;">
+                    <span id="userName"></span>
+                </div>
+                <button id="loginBtn" onclick="loginWithGoogle()">Google でログイン</button>
+                <button id="logoutBtn" onclick="logout()" style="display:none;">ログアウト</button>
+            </div>
+        </header>
+
+        <div class="main-content" id="mainContent" style="display:none;">
+            <!-- 左パネル：フォルダ選択と設定 -->
+            <div class="panel">
+                <h2>📁 フォルダ選択</h2>
+
+                <div class="folder-selector">
+                    <label for="folderIdInput">フォルダ ID:</label>
+                    <input 
+                        type="text" 
+                        id="folderIdInput" 
+                        placeholder="Google Drive のフォルダ ID を入力"
+                    >
+                    <small style="display:block; margin-top:8px; color:#999;">
+                        Drive のフォルダを開いて URL から ID をコピーしてください
+                    </small>
+                </div>
+
+                <button class="load-btn" onclick="loadImagesFromFolder()">
+                    🖼️ 画像を読み込む
+                </button>
+
+                <div class="status" id="loadStatus"></div>
+
+                <div class="settings-group" style="margin-top: 30px;">
+                    <label for="slideDuration">スライド表示時間（秒）:</label>
+                    <input 
+                        type="number" 
+                        id="slideDuration" 
+                        value="3" 
+                        min="1" 
+                        max="30"
+                    >
+                </div>
+
+                <div class="settings-group">
+                    <label for="transitionType">トランジション:</label>
+                    <select id="transitionType">
+                        <option value="fade">フェード</option>
+                        <option value="slide">スライド</option>
+                        <option value="zoom">ズーム</option>
+                    </select>
+                </div>
+
+                <div class="settings-group">
+                    <label for="autoPlayCheckbox">
+                        <input 
+                            type="checkbox" 
+                            id="autoPlayCheckbox" 
+                            checked
+                        >
+                        自動再生
+                    </label>
+                </div>
+
+                <div class="generate-section">
+                    <button class="generate-btn" id="generateBtn" onclick="generateHTML()" disabled>
+                        ✨ HTML を生成
+                    </button>
+                    <div id="downloadSection"></div>
+                </div>
+            </div>
+
+            <!-- 右パネル：画像リストとプレビュー -->
+            <div class="panel">
+                <h2>🎨 画像リスト</h2>
+
+                <div class="image-grid" id="imageGrid"></div>
+
+                <div class="preview-section">
+                    <h3>プレビュー</h3>
+                    <div class="slideshow-preview" id="preview">
+                        <div style="display:flex; align-items:center; justify-content:center; width:100%; height:100%;">
+                            <span style="color:#999;">プレビューは画像読み込み後に表示</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div style="text-align:center; margin-top:60px; color:white; display:none;" id="notLoggedIn">
+            <h2>ログインが必要です</h2>
+            <p style="margin-top:20px; font-size:16px;">上記の「Google でログイン」ボタンをクリックしてください</p>
+        </div>
+    </div>
+
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="app.js"></script>
+</body>
+</html>
