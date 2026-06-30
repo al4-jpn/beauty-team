@@ -250,21 +250,35 @@ function startPreview() {
     if (images.length === 0) return;
 
     const preview = document.getElementById('preview');
-    currentPreviewIndex = 0;
+    currentPreviewIndex = 0; // 最初の画像からスタート
 
     const updatePreview = () => {
-        if (!images[currentPreviewIndex]) return;
+        // 安全対策: もし画像データが正常に取得できていない場合は処理を抜ける
+        if (!images[currentPreviewIndex] || !images[currentPreviewIndex].url) {
+            // インデックスが範囲外になったら0に戻す
+            currentPreviewIndex = 0;
+            if (!images[currentPreviewIndex]) return;
+        }
+
+        // 画面の書き換え
         preview.innerHTML = `
             <img src="${images[currentPreviewIndex].url}" alt="slide">
             <div class="slide-counter">${currentPreviewIndex + 1} / ${images.length}</div>
         `;
+
+        // 次に表示する画像のインデックスを計算（ここで安全にループさせる）
         currentPreviewIndex = (currentPreviewIndex + 1) % images.length;
     };
 
+    // 最初の一枚目を即座に表示
     updatePreview();
+    
+    // 既存のタイマーをクリアして再セット
     clearInterval(previewInterval);
 
-    const duration = parseInt(document.getElementById('slideDuration').value) * 1000;
+    const durationInput = document.getElementById('slideDuration');
+    const duration = durationInput ? parseInt(durationInput.value) * 1000 : 3000;
+    
     previewInterval = setInterval(updatePreview, duration);
 }
 
