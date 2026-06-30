@@ -69,14 +69,13 @@ function updateUIAfterLogin() {
     document.getElementById('logoutBtn').style.display = 'block';
     document.getElementById('userInfo').style.display = 'block';
     
-    // ユーザー情報を取得（簡略化）
     document.getElementById('userName').textContent = 'ログイン中';
 }
 
 // ===== Google Drive API =====
 
 /**
- * フォルダから画像を読み込む
+ * フォルダから画像を読み込む（Base64形式に変換して取得）
  */
 async function loadImagesFromFolder() {
     const folderId = document.getElementById('folderIdInput').value.trim();
@@ -91,11 +90,12 @@ async function loadImagesFromFolder() {
         return;
     }
 
-    showStatus('loading', '画像を読み込み中...');
+    showStatus('loading', 'Google Driveの情報を取得中...');
     
     try {
+        // 1. ファイル一覧を取得
         const response = await fetch(
-            `https://www.googleapis.com/drive/v3/files?q=trashed=false and '${folderId}' in parents and mimeType contains 'image/' &fields=files(id,name,mimeType,webViewLink)&pageSize=100`,
+            `https://www.googleapis.com/drive/v3/files?q=trashed=false and '${folderId}' in parents and mimeType contains 'image/'&fields=files(id,name,mimeType,webViewLink)&pageSize=100`,
             {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`,
@@ -121,13 +121,54 @@ async function loadImagesFromFolder() {
             return;
         }
 
-        // 画像 URL を構築（Google Drive の直接リンク）
-        images = data.files.map(file => ({
-            id: file.id,
-            name: file.name,
-            url: `https://drive.google.com/uc?id=${file.id}&export=download`,
-            driveUrl: file.webViewLink
-        }));
+        showStatus('loading', `画像データをダウンロード中 (0/${data.files.length})...`);
+        
+        // 2. 各画像をバイナリデータとして取得し、Base64（データURL）に変換
+        let loadedCount = 0;
+        const imagePromises = data.files.map(async (file) => {
+            try {
+                const imgResponse = await fetch(
+                    `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
+                    {
+                        headers: {
+                            'Authorization': `Bearer ${accessToken}`,
+                        }
+                    }
+                );
+                if (!imgResponse.ok) throw new Error('画像のダウンロードに失敗');
+                
+                const blob = await imgResponse.blob();
+                
+                // Blob を Base64データURLに変換
+                const base64Url = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                });
+
+                loadedCount++;
+                showStatus('loading', `画像データをダウンロード中 (${loadedCount}/${data.files.length})...`);
+
+                return {
+                    id: file.id,
+                    name: file.name,
+                    url: base64Url, // 直リンクではなくBase64文字列が入る
+                    driveUrl: file.webViewLink
+                };
+            } catch (err) {
+                console.error(`ファイル名: ${file.name} の読み込み失敗`, err);
+                return null;
+            }
+        });
+
+        const resolvedImages = await Promise.all(imagePromises);
+        images = resolvedImages.filter(img => img !== null);
+
+        if (images.length === 0) {
+            showStatus('error', '画像の読み込みに失敗しました');
+            return;
+        }
 
         showStatus('success', `${images.length} 個の画像を読み込みました`);
         renderImageGrid();
@@ -160,7 +201,6 @@ function renderImageGrid() {
             <div class="index">${index + 1}</div>
         `;
 
-        // ドラッグ&ドロップ
         item.addEventListener('dragstart', handleDragStart);
         item.addEventListener('dragover', handleDragOver);
         item.addEventListener('drop', handleDrop);
@@ -191,7 +231,6 @@ function handleDrop(e) {
     const draggedIndex = Array.from(allItems).indexOf(draggedElement);
     const targetIndex = Array.from(allItems).indexOf(this);
 
-    // 配列を並び替え
     const [movedImage] = images.splice(draggedIndex, 1);
     images.splice(targetIndex, 0, movedImage);
 
@@ -214,6 +253,7 @@ function startPreview() {
     currentPreviewIndex = 0;
 
     const updatePreview = () => {
+        if (!images[currentPreviewIndex]) return;
         preview.innerHTML = `
             <img src="${images[currentPreviewIndex].url}" alt="slide">
             <div class="slide-counter">${currentPreviewIndex + 1} / ${images.length}</div>
@@ -251,11 +291,9 @@ function generateHTML() {
         autoPlay: autoPlay
     });
 
-    // Blob から URL を作成
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
 
-    // ダウンロードセクションに表示
     const downloadSection = document.getElementById('downloadSection');
     downloadSection.innerHTML = `
         <div class="download-link" onclick="downloadHTML('${url}')">
@@ -279,10 +317,6 @@ function generateSlideshowHTML(imageUrls, options = {}) {
         autoPlay = true,
         title = 'スライドショー'
     } = options;
-
-    const imageElements = imageUrls
-        .map((url, idx) => `<img src="${url}" alt="Slide ${idx + 1}" data-index="${idx}">`)
-        .join('\n');
 
     const transitionCSS = getTransitionCSS(transition, duration);
 
@@ -438,11 +472,11 @@ function generateSlideshowHTML(imageUrls, options = {}) {
         };
 
         const showSlide = (n) => {
+            if(slides.length === 0) return;
             slides.forEach(slide => slide.classList.remove('active'));
             slides[n].classList.add('active');
             document.getElementById('current').textContent = n + 1;
             
-            // プログレスバーをリセット
             const progressBar = document.getElementById('progressBar');
             progressBar.style.animation = 'none';
             setTimeout(() => {
@@ -484,14 +518,15 @@ function generateSlideshowHTML(imageUrls, options = {}) {
         };
 
         const init = () => {
-            showSlide(0);
-            updatePlayPauseButton();
-            if (isPlaying) {
-                startAutoPlay();
+            if(totalSlides > 0) {
+                showSlide(0);
+                updatePlayPauseButton();
+                if (isPlaying) {
+                    startAutoPlay();
+                }
             }
         };
 
-        // キーボード操作
         document.addEventListener('keydown', (e) => {
             if (e.key === 'ArrowRight') nextSlide();
             if (e.key === 'ArrowLeft') prevSlide();
@@ -507,90 +542,48 @@ function generateSlideshowHTML(imageUrls, options = {}) {
 </html>`;
 }
 
-/**
- * トランジション CSS を取得
- */
 function getTransitionCSS(type, duration) {
     switch (type) {
         case 'slide':
-            return `
-                animation: slideOut ${duration}s ease-in-out forwards;
-            `;
+            return `animation: slideOut ${duration}s ease-in-out forwards;`;
         case 'zoom':
-            return `
-                animation: zoomOut ${duration}s ease-in-out forwards;
-            `;
+            return `animation: zoomOut ${duration}s ease-in-out forwards;`;
         case 'fade':
         default:
-            return `
-                opacity: 0;
-            `;
+            return `opacity: 0;`;
     }
 }
 
-/**
- * キーフレーム CSS を取得
- */
 function getKeyframesCSS(type) {
     switch (type) {
         case 'slide':
             return `
                 @keyframes slideIn {
-                    from {
-                        transform: translateX(100%);
-                        opacity: 0;
-                    }
-                    to {
-                        transform: translateX(0);
-                        opacity: 1;
-                    }
+                    from { transform: translateX(100%); opacity: 0; }
+                    to { transform: translateX(0); opacity: 1; }
                 }
-
                 @keyframes slideOut {
-                    from {
-                        transform: translateX(0);
-                        opacity: 1;
-                    }
-                    to {
-                        transform: translateX(-100%);
-                        opacity: 0;
-                    }
+                    from { transform: translateX(0); opacity: 1; }
+                    to { transform: translateX(-100%); opacity: 0; }
                 }
             `;
         case 'zoom':
             return `
                 @keyframes slideIn {
-                    from {
-                        transform: scale(0.8);
-                        opacity: 0;
-                    }
-                    to {
-                        transform: scale(1);
-                        opacity: 1;
-                    }
+                    from { transform: scale(0.8); opacity: 0; }
+                    to { transform: scale(1); opacity: 1; }
                 }
-
                 @keyframes zoomOut {
-                    from {
-                        transform: scale(1);
-                        opacity: 1;
-                    }
-                    to {
-                        transform: scale(0.8);
-                        opacity: 0;
-                    }
+                    from { transform: scale(1); opacity: 1; }
+                    to { transform: scale(0.8); opacity: 0; }
                 }
             `;
         case 'fade':
         default:
             return `
                 @keyframes slideIn {
-                    from {
-                        opacity: 0;
-                    }
-                    to {
-                        opacity: 1;
-                    }
+                    from { opacity: 0; }
+                    to { opacity: 1; }
                 }
             `;
     }
@@ -618,6 +611,7 @@ function showStatus(type, message) {
     const statusEl = document.getElementById('loadStatus');
     statusEl.className = `status ${type}`;
     statusEl.textContent = message;
+    statusEl.style.display = 'block'; // 表示を確実にする
     
     if (type === 'success' || type === 'error') {
         setTimeout(() => {
