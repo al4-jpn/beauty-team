@@ -1,3 +1,4 @@
+
 // ===== Google OAuth 2.0 設定 =====
 // https://console.cloud.google.com でプロジェクトを作成し、
 // OAuth 2.0 クライアント ID を取得してください
@@ -428,6 +429,10 @@ function generateSlideshowHTML(imageUrls, options = {}) {
             position: absolute;
             top: 0;
             left: 0;
+        }
+
+        .slide.active {
+            display: block;
         }
 
         .slide img {
